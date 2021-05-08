@@ -66,6 +66,8 @@ static inline void outb (unsigned char value, unsigned short port)
 
 /* A list of video resolutions that we query for (sorted largest to smallest) */
 static const SDL_Rect checkres[] = {
+	{  0, 0, 1920, 1200 },		// WUXGA
+	{  0, 0, 1920, 1080 },		// 1080p FHD 16:9 = 1.7
 	{  0, 0, 1600, 1200 },		/* 16 bpp: 0x11E, or 286 */
 	{  0, 0, 1408, 1056 },		/* 16 bpp: 0x19A, or 410 */
 	{  0, 0, 1280, 1024 },		/* 16 bpp: 0x11A, or 282 */
@@ -73,12 +75,15 @@ static const SDL_Rect checkres[] = {
 	{  0, 0, 1024,  768 },		/* 16 bpp: 0x117, or 279 */
 	{  0, 0,  960,  720 },		/* 16 bpp: 0x18A, or 394 */
 	{  0, 0,  800,  600 },		/* 16 bpp: 0x114, or 276 */
+	{  0, 0,  800,  480 },		// WVGA   5:3 = 1.6
 	{  0, 0,  768,  576 },		/* 16 bpp: 0x182, or 386 */
 	{  0, 0,  720,  576 },		/* PAL */
 	{  0, 0,  720,  480 },		/* NTSC */
 	{  0, 0,  640,  480 },		/* 16 bpp: 0x111, or 273 */
 	{  0, 0,  640,  400 },		/*  8 bpp: 0x100, or 256 */
 	{  0, 0,  512,  384 },
+	{  0, 0,  480,  320 },  // HVGA   3:2 = 1.5
+	{  0, 0,  480,  272 },  // WQVGA?
 	{  0, 0,  320,  240 },
 	{  0, 0,  320,  200 }
 };
@@ -183,6 +188,7 @@ static int SDL_getpagesize(void)
 #endif
 }
 
+static void print_finfo(struct fb_fix_screeninfo *finfo);
 
 /* Small wrapper for mmap() so we can play nicely with no-mmu hosts
  * (non-mmu hosts disallow the MAP_SHARED flag) */
@@ -334,6 +340,8 @@ static int read_fbmodes_mode(FILE *f, struct fb_var_screeninfo *vinfo)
 			break;
 	}
 	while(1);
+
+	SDL_memset(vinfo, 0, sizeof(struct fb_var_screeninfo)); // prevent random junk 
 
 	SDL_sscanf(line, "geometry %d %d %d %d %d", &vinfo->xres, &vinfo->yres, 
 			&vinfo->xres_virtual, &vinfo->yres_virtual, &vinfo->bits_per_pixel);
@@ -501,7 +509,6 @@ static void FB_SortModes(_THIS)
 
 static int FB_VideoInit(_THIS, SDL_PixelFormat *vformat)
 {
-	const int pagesize = SDL_getpagesize();
 	struct fb_fix_screeninfo finfo;
 	struct fb_var_screeninfo vinfo;
 	int i, j;
@@ -584,7 +591,7 @@ static int FB_VideoInit(_THIS, SDL_PixelFormat *vformat)
 
 	/* Memory map the device, compensating for buggy PPC mmap() */
 	mapped_offset = (((long)finfo.smem_start) -
-	                (((long)finfo.smem_start)&~(pagesize-1)));
+	                (((long)finfo.smem_start)&~((SDL_getpagesize()-1)));
 	mapped_memlen = finfo.smem_len+mapped_offset;
 	mapped_mem = do_mmap(NULL, mapped_memlen,
 	                  PROT_READ|PROT_WRITE, MAP_SHARED, console_fd, 0);
@@ -898,6 +905,11 @@ static int choose_fbmodes_mode(struct fb_var_screeninfo *vinfo)
 		while ( read_fbmodes_mode(modesdb, &cinfo) ) {
 			if ( (vinfo->xres == cinfo.xres && vinfo->yres == cinfo.yres) &&
 			     (!matched || (vinfo->bits_per_pixel == cinfo.bits_per_pixel)) ) {
+
+#ifdef FBCON_DEBUG
+                fprintf(stderr, "Using FBModes timings for %dx%d\n",
+                vinfo->xres, vinfo->yres);
+#endif
 				vinfo->pixclock = cinfo.pixclock;
 				vinfo->left_margin = cinfo.left_margin;
 				vinfo->right_margin = cinfo.right_margin;
@@ -1028,12 +1040,20 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 	/* Restore the original palette */
 	FB_RestorePalette(this);
 
+    SDL_memset(&vinfo, 0, sizeof(vinfo));
 	/* Set the video mode and get the final screen format */
 	if ( ioctl(console_fd, FBIOGET_VSCREENINFO, &vinfo) < 0 ) {
 		SDL_SetError("Couldn't get console screen info");
 		return(NULL);
 	}
+    /* Get the type of video hardware */
+    if ( ioctl(console_fd, FBIOGET_FSCREENINFO, &finfo) < 0 ) {
+          SDL_SetError("Couldn't get console hardware info");
+          return(NULL);
+     }
 #ifdef FBCON_DEBUG
+    fprintf(stderr, "Printing original info:\n");
+    print_finfo(&finfo);
 	fprintf(stderr, "Printing original vinfo:\n");
 	print_vinfo(&vinfo);
 #endif
@@ -1052,6 +1072,10 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 
 	if ( (vinfo.xres != width) || (vinfo.yres != height) ||
 	     (vinfo.bits_per_pixel != bpp) || (flags & SDL_DOUBLEBUF) ) {
+#ifdef FBCON_DEBUG
+          fprintf(stderr, "Request %dx%d %d Actual %dx%d %d %s flags %x current %dx%d\n",width,height,bpp,vinfo.xres,vinfo.yres,vinfo.bits_per_pixel,(flags & SDL_DOUBLEBUF) ? "SDL_DOUBLEBUF" : "" ,flags , current->w,current->h);
+ #endif
+          SDL_memset(&vinfo, 0, sizeof(vinfo));
 		vinfo.activate = FB_ACTIVATE_NOW;
 		vinfo.accel_flags = 0;
 		vinfo.bits_per_pixel = bpp;
@@ -1101,9 +1125,17 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 			vinfo.yres_virtual = maxheight;
 		}
 	}
-	cache_vinfo = vinfo;
+ /* Get the fixed information about the console hardware.
+  *     This is necessary since finfo.line_length changes.
+  *         and in case RPI the frame buffer offsets and length change
+  *           */
+     if ( ioctl(console_fd, FBIOGET_FSCREENINFO, &finfo) < 0 ) {
+         SDL_SetError("Couldn't get console hardware info");
+         return(NULL);
+     }
 #ifdef FBCON_DEBUG
 	fprintf(stderr, "Printing actual vinfo:\n");
+    print_finfo(&finfo);
 	print_vinfo(&vinfo);
 #endif
 	Rmask = 0;
@@ -1125,15 +1157,6 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 	                                  Rmask, Gmask, Bmask, 0) ) {
 		return(NULL);
 	}
-
-	/* Get the fixed information about the console hardware.
-	   This is necessary since finfo.line_length changes.
-	 */
-	if ( ioctl(console_fd, FBIOGET_FSCREENINFO, &finfo) < 0 ) {
-		SDL_SetError("Couldn't get console hardware info");
-		return(NULL);
-	}
-
 	/* Save hardware palette, if needed */
 	FB_SavePalette(this, &finfo, &vinfo);
 
@@ -1153,7 +1176,18 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 			return(NULL);
 		}
 	}
-
+    munmap(mapped_mem, mapped_memlen);
+    /* Memory map the device, compensating for buggy PPC mmap() */
+    mapped_offset = (((long)finfo.smem_start) - (((long)finfo.smem_start)&~(SDL_getpagesize()-1)));
+    mapped_memlen = finfo.smem_len+mapped_offset;
+    mapped_mem = do_mmap(NULL, mapped_memlen,
+    PROT_READ|PROT_WRITE, MAP_SHARED, console_fd, 0);
+    if ( mapped_mem == (char *)-1 ) {
+        SDL_SetError("Unable to memory map the video hardware");
+        mapped_mem = NULL;
+        FB_VideoQuit(this);
+        return(NULL);
+    }
 	/* Set up the new mode framebuffer */
 	current->flags &= SDL_FULLSCREEN;
 	if (shadow_fb) {
@@ -1211,7 +1245,7 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 
 	/* Update for double-buffering, if we can */
 	if ( flags & SDL_DOUBLEBUF ) {
-		if ( vinfo.yres_virtual >= (height*2) ) {
+        if ( vinfo.yres_virtual >= (vinfo.yres*2) ) {
 			current->flags |= SDL_DOUBLEBUF;
 			flip_address[0] = (char *)current->pixels;
 			flip_address[1] = (char *)current->pixels+
@@ -1461,6 +1495,7 @@ static void FB_UnlockHWSurface(_THIS, SDL_Surface *surface)
 
 static void FB_WaitVBL(_THIS)
 {
+    ioctl(console_fd, FBIO_WAITFORVSYNC, 0);
 }
 
 static void FB_WaitIdle(_THIS)
@@ -1536,8 +1571,12 @@ static int FB_FlipHWSurface(_THIS, SDL_Surface *surface)
 		return -2; /* no hardware access */
 	}
 
+#ifdef FBCON_DEBUG
+    fprintf(stderr, "Flip vinfo offset changing to %d current:\n",flip_page*cache_vinfo.yres);
+    print_vinfo(&cache_vinfo);
+#endif
 	/* Wait for vertical retrace and then flip display */
-	cache_vinfo.yoffset = flip_page * cache_vinfo.yres;
+    cache_vinfo.yoffset = flip_page*cache_vinfo.yres;
 	if ( FB_IsSurfaceBusy(this->screen) ) {
 		FB_WaitBusySurfaces(this);
 	}

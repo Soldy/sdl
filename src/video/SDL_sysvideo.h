@@ -341,6 +341,9 @@ extern VideoBootStrap WSCONS_bootstrap;
 #if SDL_VIDEO_DRIVER_FBCON
 extern VideoBootStrap FBCON_bootstrap;
 #endif
+#if SDL_VIDEO_DRIVER_DISPMANX
+extern VideoBootStrap DISPMANX_bootstrap;
+#endif
 #if SDL_VIDEO_DRIVER_DIRECTFB
 extern VideoBootStrap DirectFB_bootstrap;
 #endif
