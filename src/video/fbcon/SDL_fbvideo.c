@@ -234,6 +234,8 @@ static void FB_DeleteDevice(SDL_VideoDevice *device)
 	SDL_free(device);
 }
 
+int current_page = 0;
+
 static SDL_VideoDevice *FB_CreateDevice(int devindex)
 {
 	SDL_VideoDevice *this;
@@ -508,7 +510,8 @@ static void FB_SortModes(_THIS)
 }
 
 static int FB_VideoInit(_THIS, SDL_PixelFormat *vformat)
-{
+{     
+       	int pagesize = SDL_getpagesize();
 	struct fb_fix_screeninfo finfo;
 	struct fb_var_screeninfo vinfo;
 	int i, j;
@@ -590,8 +593,8 @@ static int FB_VideoInit(_THIS, SDL_PixelFormat *vformat)
 	}
 
 	/* Memory map the device, compensating for buggy PPC mmap() */
-	mapped_offset = (((long)finfo.smem_start) -
-	                (((long)finfo.smem_start)&~((SDL_getpagesize()-1)));
+        mapped_offset = (((long)finfo.smem_start) -
+                        (((long)finfo.smem_start)&~(SDL_getpagesize()-1)));
 	mapped_memlen = finfo.smem_len+mapped_offset;
 	mapped_mem = do_mmap(NULL, mapped_memlen,
 	                  PROT_READ|PROT_WRITE, MAP_SHARED, console_fd, 0);
@@ -1225,6 +1228,7 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 	}
 
 #if !SDL_THREADS_DISABLED
+
 	if ( triplebuf_thread )
 		FB_TripleBufferStop(this);
 
@@ -1238,9 +1242,11 @@ static SDL_Surface *FB_SetVideoMode(_THIS, SDL_Surface *current,
 		triplebuf_thread = SDL_CreateThread(FB_TripleBufferingThread, this);
 
 		/* Wait until the triplebuf thread is ready */
+
 		SDL_CondWait(triplebuf_cond, triplebuf_mutex);
 		SDL_UnlockMutex(triplebuf_mutex);
 	}
+
 #endif
 
 	/* Update for double-buffering, if we can */
